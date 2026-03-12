@@ -1,6 +1,5 @@
 """
 Physics Wallah API wrapper
-Handles auth (OTP), fetching batches, subjects, topics, and video URLs.
 """
 
 import aiohttp
@@ -10,13 +9,23 @@ logger = logging.getLogger(__name__)
 
 PW_BASE = "https://api.penpencil.co"
 HEADERS_BASE = {
-    "Client-Type": "2",          # Android client
+    "Client-Type": "2",
     "Client-Version": "3.8.0",
     "randomid": "abcdef123456",
     "Accept": "application/json",
     "Content-Type": "application/json",
     "User-Agent": "okhttp/4.9.0",
 }
+
+def clean_phone(phone: str) -> str:
+    """Always return plain 10-digit number."""
+    phone = phone.strip().replace(" ", "").replace("-", "")
+    if phone.startswith("+91"):
+        phone = phone[3:]
+    elif phone.startswith("91") and len(phone) == 12:
+        phone = phone[2:]
+    return phone
+
 
 class PhysicsWallahAPI:
     def __init__(self, token: str = None):
@@ -26,9 +35,8 @@ class PhysicsWallahAPI:
             **({"Authorization": f"Bearer {token}"} if token else {})
         }
 
-    # ── Auth ─────────────────────────────────────────────────────────────────
-
     async def send_otp(self, phone: str) -> dict:
+        phone = clean_phone(phone)
         url = f"{PW_BASE}/v1/user/get-otp"
         payload = {
             "phone_number": phone,
@@ -38,18 +46,36 @@ class PhysicsWallahAPI:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=payload, headers=HEADERS_BASE) as resp:
                     data = await resp.json()
-                    logger.info(f"send_otp response: {data}")
-                    if data.get("meta", {}).get("status") == "SUCCESS" or data.get("success"):
-                        return {
-                            "success": True,
-                            "clientId": data.get("data", {}).get("client_id", ""),
-                        }
-                    return {"success": False, "message": data.get("meta", {}).get("message", "Failed")}
+                    logger.info(f"send_otp raw response: {data}")
+
+                    # Accept any of these success signals
+                    meta_status = data.get("meta", {}).get("status", "")
+                    success = (
+                        meta_status == "SUCCESS"
+                        or data.get("success") is True
+                        or data.get("status") == "SUCCESS"
+                        or resp.status == 200
+                    )
+                    if success:
+                        client_id = (
+                            data.get("data", {}).get("client_id")
+                            or data.get("data", {}).get("clientId")
+                            or data.get("client_id", "")
+                        )
+                        return {"success": True, "clientId": client_id}
+
+                    msg = (
+                        data.get("meta", {}).get("message")
+                        or data.get("message")
+                        or str(data)
+                    )
+                    return {"success": False, "message": msg}
         except Exception as e:
             logger.error(f"send_otp error: {e}")
             return {"success": False, "message": str(e)}
 
     async def verify_otp(self, phone: str, otp: str, client_id: str = "") -> dict:
+        phone = clean_phone(phone)
         url = f"{PW_BASE}/v1/user/verify-otp"
         payload = {
             "phone_number": phone,
@@ -61,21 +87,38 @@ class PhysicsWallahAPI:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=payload, headers=HEADERS_BASE) as resp:
                     data = await resp.json()
-                    logger.info(f"verify_otp response keys: {list(data.keys())}")
-                    if data.get("meta", {}).get("status") == "SUCCESS" or data.get("success"):
+                    logger.info(f"verify_otp raw response: {data}")
+
+                    meta_status = data.get("meta", {}).get("status", "")
+                    success = (
+                        meta_status == "SUCCESS"
+                        or data.get("success") is True
+                        or data.get("status") == "SUCCESS"
+                    )
+                    if success:
                         token_data = data.get("data", {})
+                        token = (
+                            token_data.get("token")
+                            or token_data.get("access_token")
+                            or token_data.get("accessToken")
+                            or ""
+                        )
                         return {
                             "success": True,
-                            "token": token_data.get("token", token_data.get("access_token", "")),
+                            "token": token,
                             "refreshToken": token_data.get("refresh_token", ""),
                             "user": token_data.get("user", {}),
                         }
-                    return {"success": False, "message": data.get("meta", {}).get("message", "Invalid OTP")}
+
+                    msg = (
+                        data.get("meta", {}).get("message")
+                        or data.get("message")
+                        or str(data)
+                    )
+                    return {"success": False, "message": msg}
         except Exception as e:
             logger.error(f"verify_otp error: {e}")
             return {"success": False, "message": str(e)}
-
-    # ── Batches ───────────────────────────────────────────────────────────────
 
     async def get_batches(self) -> dict:
         url = f"{PW_BASE}/v2/batches/my-batches"
@@ -83,6 +126,7 @@ class PhysicsWallahAPI:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=self.session_headers, params={"page": 1}) as resp:
                     data = await resp.json()
+                    logger.info(f"get_batches status: {resp.status}")
                     if data.get("meta", {}).get("status") == "SUCCESS":
                         raw = data.get("data", [])
                         batches = [
@@ -102,8 +146,6 @@ class PhysicsWallahAPI:
         except Exception as e:
             logger.error(f"get_batches error: {e}")
             return {"success": False, "message": str(e)}
-
-    # ── Subjects ──────────────────────────────────────────────────────────────
 
     async def get_batch_subjects(self, batch_id: str) -> dict:
         url = f"{PW_BASE}/v2/batches/{batch_id}/details"
@@ -127,8 +169,6 @@ class PhysicsWallahAPI:
             logger.error(f"get_batch_subjects error: {e}")
             return {"success": False, "message": str(e)}
 
-    # ── Topics ────────────────────────────────────────────────────────────────
-
     async def get_subject_topics(self, batch_id: str, subject_id: str) -> dict:
         url = f"{PW_BASE}/v2/batches/{batch_id}/subject/{subject_id}/topics"
         try:
@@ -149,8 +189,6 @@ class PhysicsWallahAPI:
         except Exception as e:
             logger.error(f"get_subject_topics error: {e}")
             return {"success": False, "message": str(e)}
-
-    # ── Videos ────────────────────────────────────────────────────────────────
 
     async def get_topic_videos(self, batch_id: str, subject_id: str, topic_id: str) -> dict:
         url = f"{PW_BASE}/v2/batches/{batch_id}/subject/{subject_id}/topic/{topic_id}/videos"
@@ -177,7 +215,6 @@ class PhysicsWallahAPI:
             return {"success": False, "message": str(e)}
 
     async def get_video_url(self, video_id: str) -> dict:
-        """Get the actual streaming URL for a video."""
         url = f"{PW_BASE}/v2/videos/{video_id}"
         try:
             async with aiohttp.ClientSession() as session:
@@ -197,41 +234,29 @@ class PhysicsWallahAPI:
             logger.error(f"get_video_url error: {e}")
             return {"success": False, "message": str(e)}
 
-    # ── Full Export ───────────────────────────────────────────────────────────
-
     async def get_all_content(self, batches: list) -> dict:
-        """Build full JSON tree: batches → subjects → topics → videos"""
         result = []
         for batch in batches:
             batch_id = batch["id"]
             batch_entry = {**batch, "subjects": []}
-
             subj_result = await self.get_batch_subjects(batch_id)
             if not subj_result.get("success"):
                 result.append(batch_entry)
                 continue
-
             for subj in subj_result.get("subjects", []):
                 subj_id = subj["id"]
                 subj_entry = {**subj, "topics": []}
-
                 topic_result = await self.get_subject_topics(batch_id, subj_id)
                 if not topic_result.get("success"):
                     batch_entry["subjects"].append(subj_entry)
                     continue
-
                 for topic in topic_result.get("topics", []):
                     topic_id = topic["id"]
                     topic_entry = {**topic, "videos": []}
-
                     vid_result = await self.get_topic_videos(batch_id, subj_id, topic_id)
                     if vid_result.get("success"):
                         topic_entry["videos"] = vid_result.get("videos", [])
-
                     subj_entry["topics"].append(topic_entry)
-
                 batch_entry["subjects"].append(subj_entry)
-
             result.append(batch_entry)
-
         return {"batches": result, "total": len(result)}
