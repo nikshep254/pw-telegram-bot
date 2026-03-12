@@ -82,6 +82,10 @@ async def enter_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid number. Enter a 10-digit mobile number:")
         return ENTER_PHONE
 
+    phone = phone.strip()
+    # Strip country code just in case user typed it
+    if phone.startswith("+91"): phone = phone[3:]
+    elif phone.startswith("91") and len(phone) == 12: phone = phone[2:]
     context.user_data["phone"] = phone
     msg = await update.message.reply_text("⏳ Sending OTP...")
 
