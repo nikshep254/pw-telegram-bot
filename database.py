@@ -1,65 +1,50 @@
-"""
-Simple JSON-based persistent storage for user sessions & batch cache.
-On Railway, all data lives in /data (Railway persistent volume) if available,
-otherwise falls back to local directory.
-"""
-
-import os
-import json
-import logging
+import os, json, logging
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data" if os.path.isdir("/data") else "./data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-USERS_FILE = DATA_DIR / "users.json"
+USERS_FILE  = DATA_DIR / "users.json"
 BATCHES_FILE = DATA_DIR / "batches.json"
+VIDEOS_FILE = DATA_DIR / "videos.json"
 
+def _load(path):
+    try:
+        return json.loads(path.read_text()) if path.exists() else {}
+    except Exception:
+        return {}
 
-def _load(path: Path) -> dict:
-    if path.exists():
-        try:
-            return json.loads(path.read_text())
-        except Exception:
-            return {}
-    return {}
-
-
-def _save(path: Path, data: dict):
+def _save(path, data):
     path.write_text(json.dumps(data, ensure_ascii=False))
 
-
 class Database:
-    # ── Users ─────────────────────────────────────────────────────────────────
+    def get_user(self, user_id, default=None):
+        return _load(USERS_FILE).get(str(user_id), default)
 
-    def get_user(self, user_id: int) -> dict | None:
-        db = _load(USERS_FILE)
-        return db.get(str(user_id))
-
-    def save_user(self, user_id: int, data: dict):
+    def save_user(self, user_id, data):
         db = _load(USERS_FILE)
         db[str(user_id)] = data
         _save(USERS_FILE, db)
-        logger.info(f"Saved user {user_id}")
 
-    def delete_user(self, user_id: int):
-        db = _load(USERS_FILE)
-        db.pop(str(user_id), None)
-        _save(USERS_FILE, db)
-        # Also clear batches cache
-        bdb = _load(BATCHES_FILE)
-        bdb.pop(str(user_id), None)
-        _save(BATCHES_FILE, bdb)
+    def delete_user(self, user_id):
+        for f in [USERS_FILE, BATCHES_FILE]:
+            db = _load(f)
+            db.pop(str(user_id), None)
+            _save(f, db)
 
-    # ── Batches cache ─────────────────────────────────────────────────────────
-
-    def save_batches(self, user_id: int, batches: list):
+    def save_batches(self, user_id, batches):
         db = _load(BATCHES_FILE)
         db[str(user_id)] = batches
         _save(BATCHES_FILE, db)
 
-    def get_batches(self, user_id: int) -> list:
-        db = _load(BATCHES_FILE)
-        return db.get(str(user_id), [])
+    def get_batches(self, user_id):
+        return _load(BATCHES_FILE).get(str(user_id), [])
+
+    def save_video(self, video_id, data):
+        db = _load(VIDEOS_FILE)
+        db[str(video_id)] = data
+        _save(VIDEOS_FILE, db)
+
+    def get_video(self, video_id):
+        return _load(VIDEOS_FILE).get(str(video_id))
