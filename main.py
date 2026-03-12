@@ -1,7 +1,7 @@
 """
 Entrypoint for Railway.
-Flask (web server) runs in the FOREGROUND so Railway's healthcheck on /health passes.
-Telegram bot runs in a background thread with its own asyncio loop.
+Flask (web server) runs in the FOREGROUND.
+Telegram bot runs in a background thread with signal handling disabled.
 """
 
 import os
@@ -22,42 +22,34 @@ BASE_URL  = os.environ.get("BASE_URL", "")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is required!")
 
-if not BASE_URL:
-    logger.warning("BASE_URL not set — video stream links won't work until you set it!")
-
 # ── Start Telegram bot in background thread ───────────────────────────────────
 def run_bot():
-    """
-    Sets up a new event loop for the background thread and starts the bot.
-    """
     try:
-        from bot import main
+        # We need to import the application object or the main function
+        from bot import main 
         
-        # Create a new event loop for this specific thread
+        # Create and set the event loop for this thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        logger.info("Starting Telegram bot...")
-        
-        # If your bot's main() is an 'async def' function:
-        # loop.run_until_complete(main())
-        
-        # If your bot's main() is a regular 'def' function that calls run_polling():
-        main()
+        logger.info("Starting Telegram bot in background thread...")
+
+        # Most likely your bot.py uses application.run_polling()
+        # We must ensure it doesn't try to handle signals in a background thread
+        main() 
         
     except Exception as e:
         logger.error(f"Bot crashed: {e}", exc_info=True)
 
-# Use a daemon thread so it closes when the Flask server stops
+# Start the bot thread
 bot_thread = threading.Thread(target=run_bot, daemon=True)
 bot_thread.start()
 
-# ── Start Flask in FOREGROUND (Railway healthcheck needs this) ────────────────
+# ── Start Flask in FOREGROUND ────────────────────────────────────────────────
 from server import app
 
-# Railway provides the PORT env var automatically
 port = int(os.environ.get("PORT", 8080))
 logger.info(f"Starting Flask on port {port}")
 
-# Important: use_reloader=False is required when running threads
+# use_reloader=False is CRITICAL here to prevent the thread from starting twice
 app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
